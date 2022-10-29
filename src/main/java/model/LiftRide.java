@@ -1,10 +1,10 @@
 package model;
 
-public class LifeRide {
+public class LiftRide {
   private Integer time;
   private Integer liftID;
 
-  public LifeRide(Integer time, Integer liftID) {
+  public LiftRide(Integer time, Integer liftID) {
     this.time = time;
     this.liftID = liftID;
   }
@@ -25,5 +25,11 @@ public class LifeRide {
     this.liftID = liftID;
   }
 
-
+  @Override
+  public String toString() {
+    return "LiftRide{" +
+        "time=" + time +
+        ", liftID=" + liftID +
+        '}';
+  }
 }

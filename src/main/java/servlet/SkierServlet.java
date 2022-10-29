@@ -1,23 +1,53 @@
 package servlet;
 
+import RabbitMQ.RabbitMQChannelFactory;
+import RabbitMQ.RabbitMQChannelPool;
 import com.google.gson.Gson;
-
-
-import java.io.BufferedReader;
-import java.io.PrintWriter;
+import com.rabbitmq.client.Channel;
+import com.rabbitmq.client.Connection;
+import com.rabbitmq.client.ConnectionFactory;
 import java.io.UnsupportedEncodingException;
-import java.util.stream.Collectors;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import javax.servlet.*;
 import javax.servlet.http.*;
 import javax.servlet.annotation.*;
 import java.io.IOException;
-import model.LifeRide;
+import model.LiftRide;
 import model.Skier;
-import com.alibaba.fastjson.JSON;
-import response.ResponseResult;
 
 @WebServlet(name = "servlet.SkierServlet", value = "/skiers/*")
 public class SkierServlet extends HttpServlet {
+
+  private static final String HOST = "172.31.24.63";
+
+  private static final String QUEUE_NAME = "skier_queue";
+
+  private static final int TOMCAT_THREADS=30;
+
+  private  RabbitMQChannelPool pool;
+
+  @Override
+  public void init(){
+
+    ConnectionFactory factory = new ConnectionFactory();
+    factory.setHost(HOST);
+    factory.setPort(5672);
+//    factory.setUsername("guest");
+//    factory.setPassword("guest");
+    final Connection RMQconn;
+    try {
+      RMQconn = factory.newConnection();
+    } catch (IOException  | TimeoutException e) {
+      throw new RuntimeException("Error: servlet init " + e.toString());
+    }
+    RabbitMQChannelFactory MQFactory=new RabbitMQChannelFactory(RMQconn);
+    pool= new RabbitMQChannelPool (TOMCAT_THREADS,MQFactory);
+
+
+  }
 
   @Override
   protected void doGet(HttpServletRequest req, HttpServletResponse res)
@@ -55,44 +85,64 @@ public class SkierServlet extends HttpServlet {
 
 
   @Override
-  public void doPost(HttpServletRequest request, HttpServletResponse response)
-       {
-         //set response and request format
+  public void doPost(HttpServletRequest request, HttpServletResponse response) {
+    //set response and request format
     response.setCharacterEncoding("UTF-8");
-         try {
-           request.setCharacterEncoding("UTF-8");
-         } catch (UnsupportedEncodingException e) {
-           e.printStackTrace();
-         }
+    try {
+      request.setCharacterEncoding("UTF-8");
+    } catch (UnsupportedEncodingException e) {
+      e.printStackTrace();
+    }
 
-         Gson gson = new Gson();
+    Gson gson = new Gson();
 
-      StringBuilder sb = new StringBuilder();
-      String s;
-      try{
-        while ((s = request.getReader().readLine()) != null) {
-          sb.append(s);
-        }
-      }catch (IOException e){
-        e.printStackTrace();
+    StringBuilder sb = new StringBuilder();
+    String s;
+    try {
+      while ((s = request.getReader().readLine()) != null) {
+        sb.append(s);
       }
-      //valid the lifeRide object
-      LifeRide lifeRide = gson.fromJson(sb.toString(), LifeRide.class);
-      if (lifeRide.getTime() == null || lifeRide.getLiftID() == null ||
-          lifeRide.getLiftID() < 1 || lifeRide.getLiftID() > 40 ||
-          lifeRide.getTime() < 1 || lifeRide.getTime() > 360) {
-        response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+    } catch (IOException e) {
+      e.printStackTrace();
+    }
+    //valid the lifeRide object
+    LiftRide liftRide = gson.fromJson(sb.toString(), LiftRide.class);
+    if (liftRide.getTime() == null || liftRide.getLiftID() == null ||
+        liftRide.getLiftID() < 1 || liftRide.getLiftID() > 40 ||
+        liftRide.getTime() < 1 || liftRide.getTime() > 360) {
+      response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
 
-        return;
-      }
-      String[] paths = request.getPathInfo().split("/");
-      if (!valid(paths)) {
-        response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
-        //out.println("path 0->"+paths[0]);
-        return;
-      }else{
-        response.setStatus(HttpServletResponse.SC_OK);
-      }
+      return;
+    }
+    String[] paths = request.getPathInfo().split("/");
+    if (!valid(paths)) {
+      response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+      //out.println("path 0->"+paths[0]);
+      return;
+    }
+    //write to the rabbit mq after validation
+
+    Skier skier=new Skier();
+    skier.setLiftRide(liftRide);
+    skier.setSkierID(Integer.parseInt(paths[7]));
+    skier.setSeasonID(paths[3]);
+    skier.setDayID(paths[5]);
+    skier.setResortID(Integer.parseInt(paths[1]));
+    try {
+      //get channel from pool
+      Channel channel=pool.getChannel();
+      channel.queueDeclare(QUEUE_NAME, false, false, false, null);
+      String objectMessage = gson.toJson(skier);
+
+      channel.basicPublish("", QUEUE_NAME, null, objectMessage.getBytes("UTF-8"));
+      //put the channel back to pool
+      pool.putChannelBackToPool(channel);
+      response.getWriter().write("successful sent message to queue");
+    } catch (IOException e) {
+      Logger.getLogger(SkierServlet.class.getName()).log(Level.INFO,"problem in sending message to queue",e);
+    }
+
+
   }
 
   public boolean valid(String[] paths) {
@@ -100,29 +150,28 @@ public class SkierServlet extends HttpServlet {
       return false;
     }
 
-    if(!paths[2].equals("seasons")){
+    if (!paths[2].equals("seasons")) {
       return false;
     }
-    if(!paths[4].equals("days")){
+    if (!paths[4].equals("days")) {
       return false;
     }
-    if(!paths[6].equals("skiers")){
+    if (!paths[6].equals("skiers")) {
       return false;
     }
-    if(Integer.parseInt(paths[1])<1 || Integer.parseInt(paths[1])>10){
+    if (Integer.parseInt(paths[1]) < 1 || Integer.parseInt(paths[1]) > 10) {
       return false;
     }
-//    if(!paths[3].equals("2022")){
-//      return false;
-//    }
-//    if(!paths[5].equals("1")){
-//      return false;
-//    }
-//    if(Integer.parseInt(paths[7])<1 || Integer.parseInt(paths[7])>100000){
-//      return false;
-//    }
+    if (!paths[3].equals("2022")) {
+      return false;
+    }
+    if (!paths[5].equals("1")) {
+      return false;
+    }
+    if (Integer.parseInt(paths[7]) < 1 || Integer.parseInt(paths[7]) > 100000) {
+      return false;
+    }
     return true;
   }
-
 
 }
