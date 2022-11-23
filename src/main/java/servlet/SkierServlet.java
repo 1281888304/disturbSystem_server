@@ -3,6 +3,7 @@ package servlet;
 import RabbitMQ.RabbitMQChannelFactory;
 import RabbitMQ.RabbitMQChannelPool;
 import com.google.gson.Gson;
+import com.rabbitmq.client.BuiltinExchangeType;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
@@ -121,7 +122,7 @@ public class SkierServlet extends HttpServlet {
       return;
     }
     //write to the rabbit mq after validation
-
+    String exchangeName = "fanout_exchange";
     Skier skier=new Skier();
     skier.setLiftRide(liftRide);
     skier.setSkierID(Integer.parseInt(paths[7]));
@@ -131,10 +132,15 @@ public class SkierServlet extends HttpServlet {
     try {
       //get channel from pool
       Channel channel=pool.getChannel();
-      channel.queueDeclare(QUEUE_NAME, false, false, false, null);
+      //channel.queueDeclare(QUEUE_NAME, false, false, false, null);
+      channel.exchangeDeclare(exchangeName, BuiltinExchangeType.FANOUT);
       String objectMessage = gson.toJson(skier);
+      //direct mq
+      //channel.basicPublish("", QUEUE_NAME, null, objectMessage.getBytes("UTF-8"));
 
-      channel.basicPublish("", QUEUE_NAME, null, objectMessage.getBytes("UTF-8"));
+      //fanout mq
+      channel.basicPublish(exchangeName,"",null,objectMessage.getBytes("UTF-8"));
+
       //put the channel back to pool
       pool.putChannelBackToPool(channel);
       response.getWriter().write("successful sent message to queue");
